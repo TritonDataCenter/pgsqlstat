@@ -7,7 +7,7 @@
 ps_arg0="pgsqlslow"
 
 #
-# Some of this boilerplate is common to pgsqlstat, but it's duplicated here
+# Some of this boilerplate is common to several tools, but it's duplicated here
 # because it's very useful for these to be standalone scripts.
 #
 ps_tmpfile="/var/tmp/$ps_arg0.$$"
@@ -23,11 +23,14 @@ if [[ "$1" == "-h" || "$1" == "--help" ]]; then
 	cat >&2 <<EOF
 $ps_synopsis
 
-Instrument all postgres instances visible on this system and report details
-about queries taking longer than NMILLISECONDS from start to finish.  This tool
-requires privileges to use DTrace on postgres processes on this system.  If you
-see no output but expect some, check whether your user has permissions to trace
-the postgres processes.
+Print details about queries taking longer than NMILLISECONDS from start to
+finish on all postgresql instances on this system.  Note that since this tool
+traces query start to query done, it will never see queries taking longer than
+NMILLISECONDS seconds.
+
+This tool requires privileges to use DTrace on postgres processes on this
+system.  If you see no output but expect some, check whether your user has
+permissions to trace the postgres processes.
 EOF
 	exit 2
 elif ! [[ "$1" -eq "0" || "$1" =~ $ps_number_re ]]; then
@@ -43,7 +46,7 @@ function cleanup
 }
 
 if ! type dtrace > /dev/null 2>&1; then
-	echo "pgsqlstat: requires dtrace(1M), but not found" >&2
+	echo "$ps_arg0: requires dtrace(1M), but not found" >&2
 	exit 1
 fi
 

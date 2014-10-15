@@ -1,0 +1,118 @@
+#!/bin/bash
+
+#
+# pgsqllat NSECONDS: report query latency distribution
+#
+
+ps_arg0="pgsqllat"
+
+#
+# Some of this boilerplate is common to several tools, but it's duplicated here
+# because it's very useful for these to be standalone scripts.
+#
+ps_tmpfile="/var/tmp/$ps_arg0.$$"
+ps_number_re='^[1-9][0-9]*$'
+ps_synopsis="usage: $ps_arg0 NSECONDS"
+
+if [[ $# == 0 || $# -gt 2 ]]; then
+	echo "$ps_synopsis" >&2
+	exit 2
+fi
+
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+	cat >&2 <<EOF
+$ps_synopsis
+
+Traces all queries for NSECONDS seconds on all postgresql instances on this
+system and prints distributions of query latency over time and overall query
+latency.  Note that because this tool traces from query start to query
+completion, it will never see queries that take longer than NSECONDS to
+complete.
+
+This tool requires privileges to use DTrace on postgres processes on this
+system.  If you see no output but expect some, check whether your user has
+permissions to trace the postgres processes.  
+EOF
+	exit 2
+elif [[ "$1" != 0 && ! "$1" =~ $ps_number_re ]]; then
+	echo "$ps_arg0: bad number" >&2
+	echo "$ps_synopsis" >&2
+	exit 2
+fi
+
+trap cleanup EXIT
+function cleanup
+{
+	rm -f "$ps_tmpfile"
+}
+
+if ! type dtrace > /dev/null 2>&1; then
+	echo "$ps_arg0: requires dtrace(1M), but not found" >&2
+	exit 1
+fi
+
+cat > "$ps_tmpfile" <<EOF
+#!/usr/sbin/dtrace -Cs
+
+#define PERIOD_SECONDS		$1
+
+#pragma D option aggsortkey
+#pragma D option aggpack
+#pragma D option aggzoom
+#pragma D option quiet
+#pragma D option zdefs
+
+BEGIN
+{
+	started = timestamp;
+	@stats["queries failed"] = sum(0);
+	@stats["queries ok"] = sum(0);
+	@stats["queries started"] = sum(0);
+}
+
+postgresql*:::query-start
+/!self->start/
+{
+	self->start = timestamp;
+	self->qstr = arg0;
+	@stats["queries started"] = sum(1);
+}
+
+postgresql*:::query-done,
+postgresql*:::transaction-abort
+/self->start/
+{
+	@bytime[walltimestamp / 1000000000] =
+	    quantize((timestamp - self->start) / 1000);
+	@overall = llquantize((timestamp - self->start) / 1000, 10, 0, 8, 10);
+
+	@stats[probename == "query-done" ?
+	    "queries ok" : "queries failed"] = sum(1);
+
+	self->start = 0;
+	self->qstr = 0;
+}
+
+tick-1s
+/nsecs++ == PERIOD_SECONDS - 1/
+{
+	exit(0);
+}
+
+END
+{
+	@stats["elapsed time (us)"] = sum((timestamp - started) / 1000);
+	printa(@stats);
+
+	printf("\n");
+	printf("All queries: latency (in microseconds), per second:");
+	printa(@bytime);
+
+	printf("\n");
+	printf("All queries: latency (in microseconds), over all %d seconds:",
+	    PERIOD_SECONDS);
+	printa(@overall);
+}
+EOF
+
+dtrace -Cs "$ps_tmpfile"

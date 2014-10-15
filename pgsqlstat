@@ -1,23 +1,32 @@
 #!/bin/bash
 
 #
-# pgsqlstat: report top-level postgres stats
+# pgsqlstat NSECONDS: report top-level postgres stats
 #
 
-ps_tmpfile="/var/tmp/pgsqlstat.$$"
+ps_arg0="pgsqlstat"
+
+#
+# Some of this boilerplate is common to several tools, but it's duplicated here
+# because it's very useful for these to be standalone scripts.
+#
+ps_tmpfile="/var/tmp/$ps_arg0.$$"
 ps_number_re='^[1-9][0-9]*$'
+ps_synopsis="usage: $ps_arg0 NSECONDS"
 
 if [[ $# == 0 ]]; then
-	echo "usage: pgsqlstat NSECONDS" >&2
+	echo "$ps_synopsis" >&2
 	exit 2
 fi
 
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
 	cat >&2 <<EOF
-usage: pgsqlstat NSECONDS
+$ps_synopsis
 
-Prints out stats about all postgresql instances visible on this system.
-Columns:
+Prints out stats every NSECONDS about all postgresql instances visible on this
+system.  Use CTRL-C to stop.
+
+Output columns:
 
     QS		Queries started
     QD		Queries completed (both successes and failures)
@@ -38,12 +47,11 @@ Columns:
 This tool requires privileges to use DTrace on postgres processes on this
 system.  If you see all zeroes but expect some data, check whether your user has
 permissions to trace the postgres processes.
-
 EOF
 	exit 2
 elif ! [[ "$1" =~ $ps_number_re ]]; then
-	echo "pgsqlstat: bad number of seconds" >&2
-	echo "usage: pgsqlstat NSECONDS" >&2
+	echo "$ps_arg0: bad number of seconds" >&2
+	echo "$ps_synopsis" >&2
 	exit 2
 fi
 
@@ -54,20 +62,16 @@ function cleanup
 }
 
 if ! type dtrace > /dev/null 2>&1; then
-	echo "pgsqlstat: requires dtrace(1M), but not found" >&2
+	echo "$ps_arg0: requires dtrace(1M), but not found" >&2
 	exit 1
 fi
 
 cat > "$ps_tmpfile" <<EOF
 #!/usr/sbin/dtrace -s
-/* vim: set ft=d: */
 
 #pragma D option quiet
 #pragma D option zdefs
 
-/*
- * pgsqlstat: postgres basic stats tool
- */
 BEGIN
 {
 	@querystarts = sum(0);

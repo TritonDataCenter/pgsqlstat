@@ -1,21 +1,40 @@
 # pgsql tools
 
-This repo contains two tools for monitoring Postgres:
+This repo contains a few tools for monitoring Postgres in production:
 
-* pgsqlstat: report top-level postgres stats
-* pgsqlslow: print details about slow queries
+* [pgsqlstat](#pgsqlstat): report top-level postgres stats
+* [pgsqlslow](#pgsqlslow): print details about queries taking longer than N
+  milliseconds
+* [pgsqlslowest](#pgsqlslowest): print details about N slowest queries
+* [pgsqllat](#pgsqllat): print details about query latency distribution
 
-Both of these use Postgres's built-in DTrace probes under the hood, so you don't
-have to reconfigure or restart Postgres to start using them.
+All of these use Postgres's built-in DTrace probes under the hood, which means:
+
+* You don't have to reconfigure or restart Postgres to start using them.
+* They instrument all Postgres processes visible on the system.
+* These tools require privileges to use DTrace on postgres processes on your
+  system.  If you don't see any output (or see all zeroes) but you think your
+  database is doing work, check whether you have the right privileges.
+
+The output format for all of these tools may change.
+
+For more information about Postgres's DTrace support, see the [Dynamic
+Tracing](http://www.postgresql.org/docs/current/static/dynamic-trace.html)
+chapter in the Postgres manual.
+
+The Postgres Wiki has more information about [monitoring
+Postgres](https://wiki.postgresql.org/wiki/Monitoring) and watching [slow
+queries](https://wiki.postgresql.org/wiki/Logging_Difficult_Queries).  The
+tools here exist because they're completely standalone and don't require
+reconfiguring or even restarting Postgres in order to use them.
 
 
-# pgsqlstat: report top-level postgres stats
-
-## Synopsis
+# <a name="pgsqlstat">pgsqlstat</a>: report top-level postgres stats
 
     pgsqlstat NSECONDS
 
-Prints out stats about all postgresql instances visible on this system.
+Prints out stats every NSECONDS about all postgresql instances visible on this
+system.  Use CTRL-C to stop.
 
 Here's an example run on a postgres database that started idle and then had
 "pgbench" run against it for 10 seconds:
@@ -67,22 +86,15 @@ Output columns:
                 non-zero, that may indicate that wal_buffers needs to be tuned.
                 See the Postgres manual for details.
 
-This tool requires privileges to use DTrace on postgres processes on this
-system.  If you see all zeroes but expect some data, check whether your user has
-permissions to trace the postgres processes.
 
-The output format is unstable and may change.
-
-
-# pgsqlslow: print details about slow queries
-
-## Synopsis
+# <a name="pgsqlslow">pgsqlslow</a>: print details about slow queries
 
     pgsqlstat NMILLISECONDS
 
-Instruments all postgres instances visible on this system and reports details
-about queries taking longer than NMILLISECONDS milliseconds from start to
-finish.
+Print details about queries taking longer than NMILLISECONDS from start to
+finish on all postgresql instances on this system.  Note that since this tool
+traces query start to query done, it will never see queries taking longer than
+NMILLISECONDS seconds.
 
 Here's an example running this with a 40ms threshold during a "pgbench" run:
 
@@ -103,12 +115,121 @@ Here's an example running this with a 40ms threshold during a "pgbench" run:
           buffers: 0 read (0 hit, 0 missed), 0 flushed
 
 This shows that there were three queries that took longer than 40ms.  The tool
-prints out the time required to parse, plan, and execute each query, the number
-of transactions started, committed, or aborted, and the number of internal
+prints out the time required to parse, plan, and execute each query; the number
+of transactions started, committed, or aborted; and the number of internal
 postgres buffers read and flushed.
 
-This tool requires privileges to use DTrace on postgres processes on this
-system.  If you see no output but expect some, check whether your user has
-permissions to trace the postgres processes.
 
-The output format is unstable and may change.
+# <a name="pgsqlslowest">pgsqlslowest</a>
+
+    pgsqlslowest NSECONDS [MAXQUERIES]
+
+Traces all queries for NSECONDS seconds on all postgresql instances on this
+system and prints the MAXQUERIES slowest queries.  Note that because this tool
+traces from query start to query completion, it will never see queries that
+take longer than NSECONDS to complete.
+
+For example, tracing the 15 slowest queries over five seconds while running "pgbench":
+
+    $ pgsqlslowest 5 15
+
+      queries failed                                                    0
+      queries ok                                                    35702
+      queries started                                               35711
+      elapsed time (us)                                           5006660
+
+    Slowest queries: latency (us):
+
+         30393  UPDATE pgbench_tellers SET tbalance = tbalance + -2025 WHERE tid = 8;
+         30774  UPDATE pgbench_tellers SET tbalance = tbalance + -3603 WHERE tid = 3;
+         32275  UPDATE pgbench_tellers SET tbalance = tbalance + 152 WHERE tid = 10;
+         33840  UPDATE pgbench_branches SET bbalance = bbalance + 1282 WHERE bid = 1;
+         34364  UPDATE pgbench_tellers SET tbalance = tbalance + 4838 WHERE tid = 4;
+         35507  UPDATE pgbench_branches SET bbalance = bbalance + 2263 WHERE bid = 1;
+         36241  UPDATE pgbench_tellers SET tbalance = tbalance + 3174 WHERE tid = 2;
+         36260  UPDATE pgbench_tellers SET tbalance = tbalance + -4164 WHERE tid = 5;
+         36911  UPDATE pgbench_tellers SET tbalance = tbalance + 4609 WHERE tid = 7;
+         37583  UPDATE pgbench_branches SET bbalance = bbalance + -4310 WHERE bid = 1;
+         42188  UPDATE pgbench_tellers SET tbalance = tbalance + -922 WHERE tid = 5;
+         45902  UPDATE pgbench_tellers SET tbalance = tbalance + 2607 WHERE tid = 6;
+         46313  UPDATE pgbench_tellers SET tbalance = tbalance + -2672 WHERE tid = 5;
+        118198  BEGIN;
+       2083346  END;
+
+# <a name="pgsqllat">pgsqllat</a>
+
+    pgsqllat NSECONDS
+
+Traces all queries for NSECONDS seconds on all postgresql instances on this
+system and prints distributions of query latency over time and overall query
+latency.  Note that because this tool traces from query start to query
+completion, it will never see queries that take longer than NSECONDS to
+complete.
+
+For example, tracing queries over ten seconds while running "pgbench":
+
+    $ pfexec pgsqllat 10
+
+      elapsed time (us)                                          10001952
+      queries failed                                                    0
+      queries ok                                                    73301
+      queries started                                               73311
+
+    All queries: latency (in microseconds), per second:
+
+                  key  min .------------------. max    | count
+           1413409840    4 : ▁▃▁▅█▃▁▂▂▂▂▁▁    : 524288 | 2459
+           1413409841    4 : ▁▃▁▆█▃▁▂▂▂▁▁▁    : 524288 | 8597
+           1413409842    4 : ▂▃▁▅█▂▁▂▂▂▁▁  ▁  : 524288 | 7420
+           1413409843    4 : ▁▃▁▄█▂▁▂▂▂▁▁▁    : 524288 | 8141
+           1413409844    4 : ▂▃▁▅█▂▁▂▂▂▁▁     : 524288 | 8714
+           1413409845    4 : ▁▃▁▅█▂▁▂▂▂▁▁     : 524288 | 8730
+           1413409846    4 : ▁▃▁▃█▃▁▂▂▂▂▁▁    : 524288 | 7474
+           1413409847    4 :  ▃▁▂█▄▁▂▂▂▂▁▁    : 524288 | 6744
+           1413409848    4 : ▁▃▁▄█▃▁▂▂▂▁▁▁    : 524288 | 8063
+           1413409849    4 :  ▃▂▂█▆▁▂▂▂▂▁▁ ▁▁ : 524288 | 4695
+           1413409850    4 :  ▃▁▃█▄▁▂▂▂▁▁▁▁▁  : 524288 | 2264
+
+    All queries: latency (in microseconds), over all 10 seconds:
+
+               value  ------------- Distribution ------------- count    
+                   9 |                                         0        
+                  10 |@@@@                                     2669     
+                  20 |@@@@@@@@@                                6102     
+                  30 |@@                                       1431     
+                  40 |                                         75       
+                  50 |                                         57       
+                  60 |                                         36       
+                  70 |@                                        810      
+                  80 |@@                                       1335     
+                  90 |@@@@                                     2764     
+                 100 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   25431    
+                 200 |@@@@@@@@@@@@@@@@@@@                      12950    
+                 300 |@@@@                                     2380     
+                 400 |@                                        391      
+                 500 |                                         179      
+                 600 |                                         147      
+                 700 |                                         160      
+                 800 |                                         206      
+                 900 |                                         326      
+                1000 |@@@@@@                                   4349     
+                2000 |@@@@                                     3009     
+                3000 |@@@                                      2013     
+                4000 |@@                                       1509     
+                5000 |@@                                       1121     
+                6000 |@                                        841      
+                7000 |@                                        651      
+                8000 |@                                        522      
+                9000 |@                                        390      
+               10000 |@@                                       1243     
+               20000 |                                         147      
+               30000 |                                         21       
+               40000 |                                         3        
+               50000 |                                         2        
+               60000 |                                         1        
+               70000 |                                         0        
+               80000 |                                         0        
+               90000 |                                         0        
+              100000 |                                         20       
+              200000 |                                         10       
+              300000 |                                         0        

@@ -1,0 +1,111 @@
+#!/bin/bash
+
+#
+# pgsqlslowest NSECONDS [MAXCOUNT]: report slowest postgres queries
+#
+
+ps_arg0="pgsqlslowest"
+
+#
+# Some of this boilerplate is common to several tools, but it's duplicated here
+# because it's very useful for these to be standalone scripts.
+#
+ps_tmpfile="/var/tmp/$ps_arg0.$$"
+ps_number_re='^[1-9][0-9]*$'
+ps_synopsis="usage: $ps_arg0 NSECONDS [MAXCOUNT]"
+
+if [[ $# == 0 || $# -gt 2 ]]; then
+	echo "$ps_synopsis" >&2
+	exit 2
+fi
+
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+	cat >&2 <<EOF
+$ps_synopsis
+
+Traces all queries for NSECONDS seconds on all postgresql instances on this
+system and prints the MAXQUERIES slowest queries.  Note that because this tool
+traces from query start to query completion, it will never see queries that
+take longer than NSECONDS to complete.
+
+This tool requires privileges to use DTrace on postgres processes on this
+system.  If you see no output but expect some, check whether your user has
+permissions to trace the postgres processes.
+EOF
+	exit 2
+elif [[ "$1" != 0 && ! "$1" =~ $ps_number_re ]] ||
+     [[ "$#" -gt 1 && ! "$2" =~ $ps_number_re ]]; then
+	echo "$ps_arg0: bad number" >&2
+	echo "$ps_synopsis" >&2
+	exit 2
+fi
+
+trap cleanup EXIT
+function cleanup
+{
+	rm -f "$ps_tmpfile"
+}
+
+if ! type dtrace > /dev/null 2>&1; then
+	echo "$ps_arg0: requires dtrace(1M), but not found" >&2
+	exit 1
+fi
+
+cat > "$ps_tmpfile" <<EOF
+#!/usr/sbin/dtrace -Cs
+
+#define PERIOD_SECONDS		$1
+#define	MAX_SLOW_QUERIES	${2:-50}
+
+#pragma D option aggpack
+#pragma D option aggzoom
+#pragma D option quiet
+#pragma D option zdefs
+
+BEGIN
+{
+	started = timestamp;
+	@stats["queries failed"] = sum(0);
+	@stats["queries ok"] = sum(0);
+	@stats["queries started"] = sum(0);
+}
+
+postgresql*:::query-start
+/!self->start/
+{
+	self->start = timestamp;
+	self->qstr = arg0;
+	@stats["queries started"] = sum(1);
+}
+
+postgresql*:::query-done,
+postgresql*:::transaction-abort
+/self->start/
+{
+	@stats[probename == "query-done" ?
+	    "queries ok" : "queries failed"] = sum(1);
+	@byquery[copyinstr(self->qstr)] = sum((timestamp - self->start) / 1000);
+	trunc(@byquery, MAX_SLOW_QUERIES);
+
+	self->start = 0;
+	self->qstr = 0;
+}
+
+tick-1s
+/nsecs++ == PERIOD_SECONDS - 1/
+{
+	exit(0);
+}
+
+END
+{
+	@stats["elapsed time (us)"] = sum((timestamp - started) / 1000);
+
+	printa(@stats);
+	printf("\n");
+	printf("Slowest queries: latency (us):\n\n");
+	printa("  %@8d  %s\n", @byquery);
+}
+EOF
+
+dtrace -Cs "$ps_tmpfile"
