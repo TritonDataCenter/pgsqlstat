@@ -1,3 +1,13 @@
+# pgsql tools
+
+This repo contains two tools for monitoring Postgres:
+
+* pgsqlstat: report top-level postgres stats
+* pgsqlslow: print details about slow queries
+
+Both of these use Postgres's built-in DTrace probes under the hood.
+
+
 # pgsqlstat: report top-level postgres stats
 
 ## Synopsis
@@ -58,6 +68,46 @@ Output columns:
 
 This tool requires privileges to use DTrace on postgres processes on this
 system.  If you see all zeroes but expect some data, check whether your user has
+permissions to trace the postgres processes.
+
+The output format is unstable and may change.
+
+
+# pgsqlslow: print details about slow queries
+
+## Synopsis
+
+    pgsqlstat NMILLISECONDS
+
+Instruments all postgres instances visible on this system and reports details
+about queries taking longer than NMILLISECONDS milliseconds from start to
+finish.
+
+Here's an example running this with a 40ms threshold during a "pgbench" run:
+
+    $ pgsqlslow 40
+    QUERY: UPDATE pgbench_tellers SET tbalance = tbalance + 1763 WHERE tid = 8;
+       total time:    42650 us (parse/plan/execute = 16us/62us/42519us)
+             txns: 0 started, 0 committed, 0 aborted
+          buffers: 20 read (20 hit, 0 missed), 0 flushed
+
+    QUERY: UPDATE pgbench_tellers SET tbalance = tbalance + 4281 WHERE tid = 3;
+       total time:    49118 us (parse/plan/execute = 18us/80us/48950us)
+             txns: 0 started, 0 committed, 0 aborted
+          buffers: 18 read (18 hit, 0 missed), 0 flushed
+
+    QUERY: END;
+       total time:   233183 us (parse/plan/execute = 9us/0us/5us)
+             txns: 0 started, 1 committed, 0 aborted
+          buffers: 0 read (0 hit, 0 missed), 0 flushed
+
+This shows that there were three queries that took longer than 40ms.  The tool
+prints out the time required to parse, plan, and execute each query, the number
+of transactions started, committed, or aborted, and the number of internal
+postgres buffers read and flushed.
+
+This tool requires privileges to use DTrace on postgres processes on this
+system.  If you see no output but expect some, check whether your user has
 permissions to trace the postgres processes.
 
 The output format is unstable and may change.
