@@ -60,7 +60,7 @@ cat > "$ps_tmpfile" <<EOF
 
 /*
  * XXX can queries be started recursively?  If so, this will do the right thing
- * on query entry (only capturing the top-level one), but not oon query-done.
+ * on query entry (only capturing the top-level one), but not on query-done.
  */
 postgresql*:::query-start
 /!self->start/
