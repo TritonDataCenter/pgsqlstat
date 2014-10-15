@@ -34,7 +34,7 @@ system.  If you see no output but expect some, check whether your user has
 permissions to trace the postgres processes.  
 EOF
 	exit 2
-elif [[ "$1" != 0 && ! "$1" =~ $ps_number_re ]]; then
+elif [[ ! "$1" =~ $ps_number_re ]]; then
 	echo "$ps_arg0: bad number" >&2
 	echo "$ps_synopsis" >&2
 	exit 2
