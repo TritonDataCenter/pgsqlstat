@@ -16,7 +16,8 @@ All of these use Postgres's built-in DTrace probes under the hood, which means:
   system.  If you don't see any output (or see all zeroes) but you think your
   database is doing work, check whether you have the right privileges.
 
-The output format for all of these tools may change.
+These tools are a work in progress.  The output format for all of these tools
+may change.
 
 For more information about Postgres's DTrace support, see the [Dynamic
 Tracing](http://www.postgresql.org/docs/current/static/dynamic-trace.html)
