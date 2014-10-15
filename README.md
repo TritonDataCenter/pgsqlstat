@@ -3,8 +3,8 @@
 This repo contains a few tools for monitoring Postgres in production:
 
 * [pgsqlstat](#pgsqlstat): report top-level postgres stats
-* [pgsqlslow](#pgsqlslow): print details about queries taking longer than N
-  milliseconds
+* [pgsqlslower](#pgsqlslower): print details about queries taking longer
+  than N milliseconds
 * [pgsqlslowest](#pgsqlslowest): print details about N slowest queries
 * [pgsqllat](#pgsqllat): print details about query latency distribution
 
@@ -87,9 +87,9 @@ Output columns:
                 See the Postgres manual for details.
 
 
-# <a name="pgsqlslow">pgsqlslow</a>: print details about slow queries
+# <a name="pgsqlslower">pgsqlslower</a>: print details about slow queries
 
-    pgsqlstat NMILLISECONDS
+    pgsqlslower NMILLISECONDS
 
 Print details about queries taking longer than NMILLISECONDS from start to
 finish on all postgresql instances on this system.  Note that since this tool
@@ -98,7 +98,7 @@ NMILLISECONDS seconds.
 
 Here's an example running this with a 40ms threshold during a "pgbench" run:
 
-    $ pgsqlslow 40
+    $ pgsqlslower 40
     QUERY: UPDATE pgbench_tellers SET tbalance = tbalance + 1763 WHERE tid = 8;
        total time:    42650 us (parse/plan/execute = 16us/62us/42519us)
              txns: 0 started, 0 committed, 0 aborted
@@ -168,7 +168,7 @@ complete.
 
 For example, tracing queries over ten seconds while running "pgbench":
 
-    $ pfexec pgsqllat 10
+    $ pgsqllat 10
 
       elapsed time (us)                                          10001952
       queries failed                                                    0

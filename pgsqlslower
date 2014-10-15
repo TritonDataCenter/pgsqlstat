@@ -1,10 +1,10 @@
 #!/bin/bash
 
 #
-# pgsqlslow NMILLIS: report details on slow postgres queries
+# pgsqlslower NMILLIS: report details on slow postgres queries
 #
 
-ps_arg0="pgsqlslow"
+ps_arg0="pgsqlslower"
 
 #
 # Some of this boilerplate is common to several tools, but it's duplicated here
