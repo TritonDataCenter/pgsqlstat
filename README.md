@@ -5,7 +5,8 @@ This repo contains two tools for monitoring Postgres:
 * pgsqlstat: report top-level postgres stats
 * pgsqlslow: print details about slow queries
 
-Both of these use Postgres's built-in DTrace probes under the hood.
+Both of these use Postgres's built-in DTrace probes under the hood, so you don't
+have to reconfigure or restart Postgres to start using them.
 
 
 # pgsqlstat: report top-level postgres stats
