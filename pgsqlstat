@@ -1,0 +1,176 @@
+#!/bin/bash
+
+#
+# pgsqlstat: report top-level postgres stats
+#
+
+ps_tmpfile="/var/tmp/pgsqlstat.$$"
+ps_number_re='^[1-9][0-9]*$'
+
+if [[ $# == 0 ]]; then
+	echo "usage: pgsqlstat NSECONDS" >&2
+	exit 2
+fi
+
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+	cat >&2 <<EOF
+usage: pgsqlstat NSECONDS
+
+Prints out stats about all postgresql instances visible on this system.
+Columns:
+
+    QS		Queries started
+    QD		Queries completed (both successes and failures)
+    TxnS	Transactions started
+    TxCm	Transactions committed
+    TxAb	Transactions aborted
+    XLI		WAL records inserted into the transaction log
+    Srt		Sort operations completed
+    BufRd	Buffer read operations completed
+    BufWd	Dirty buffers written.  If this number is frequently non-zero,
+    		that usually indicates that shared_buffers or the bgwriter
+		control parameters should be tuned.  See the Postgres manual for
+		details.
+    WBD		Dirty WAL buffers written.  If this number is frequently
+    		non-zero, that may indicate that wal_buffers needs to be tuned.
+		See the Postgres manual for details.
+
+This tool requires privileges to use DTrace on postgres processes on this
+system.  If you see all zeroes but expect some data, check whether your user has
+permissions to trace the postgres processes.
+
+EOF
+	exit 2
+elif ! [[ "$1" =~ $ps_number_re ]]; then
+	echo "pgsqlstat: bad number of seconds" >&2
+	echo "usage: pgsqlstat NSECONDS" >&2
+	exit 2
+fi
+
+trap cleanup EXIT
+function cleanup
+{
+	rm -f "$ps_tmpfile"
+}
+
+if ! type dtrace > /dev/null 2>&1; then
+	echo "pgsqlstat: requires dtrace(1M), but not found" >&2
+	exit 1
+fi
+
+cat > "$ps_tmpfile" <<EOF
+#!/usr/sbin/dtrace -s
+/* vim: set ft=d: */
+
+#pragma D option quiet
+#pragma D option zdefs
+
+/*
+ * pgsqlstat: postgres basic stats tool
+ */
+BEGIN
+{
+	@querystarts = sum(0);
+	@querydone = sum(0);
+	@txnstarts = sum(0);
+	@txncommits = sum(0);
+	@txnaborts = sum(0);
+	@bufreads = sum(0);
+	@bufwritedirty = sum(0);
+	@walbufwritedirty = sum(0);
+	@xloginsert = sum(0);
+	@sorts = sum(0);
+
+	printf("%5s %5s %5s %5s %4s %5s %4s %8s %7s %4s\n",
+	    "QS", "QD", "TxnS", "TxCm", "TxAb", "XLI", "Sort",
+	    "BufRd", "BufWd", "WBD");
+}
+
+postgresql*:::query-start
+{
+	@querystarts = sum(1);
+}
+
+postgresql*:::query-done
+{
+	@querydone = sum(1);
+}
+
+postgresql*:::transaction-start
+{
+	@txnstarts = sum(1);
+}
+
+postgresql*:::transaction-commit
+{
+	@txncommits = sum(1);
+}
+
+postgresql*:::transaction-abort
+{
+	@txnaborts = sum(1);
+}
+
+postgresql*:::xlog-insert
+{
+	@xloginsert = sum(1);
+}
+
+postgresql*:::sort-done
+{
+	@sorts = sum(1);
+}
+
+postgresql*:::buffer-read-done
+{
+	@bufreads = sum(1);
+}
+
+postgresql*:::buffer-write-dirty-done
+{
+	@bufwritedirty = sum(1);
+}
+
+postgresql*:::wal-buffer-write-dirty-done
+{
+	@walbufwritedirty = sum(1);
+}
+
+tick-$1s
+{
+	printa("%@5d ", @querystarts);
+	printa("%@5d ", @querydone);
+	printa("%@5d ", @txnstarts);
+	printa("%@5d ", @txncommits);
+	printa("%@4d ", @txnaborts);
+	printa("%@5d ", @xloginsert);
+	printa("%@4d ", @sorts);
+	printa("%@8d ", @bufreads);
+	printa("%@7d ", @bufwritedirty);
+	printa("%@4d ", @walbufwritedirty);
+	printf("\n");
+
+	clear(@querystarts);
+	clear(@querydone);
+	clear(@txnstarts);
+	clear(@txncommits);
+	clear(@txnaborts);
+	clear(@xloginsert);
+	clear(@sorts);
+	clear(@bufreads);
+	clear(@bufwritedirty);
+	clear(@walbufwritedirty);
+	nticks++;
+}
+
+tick-$1s
+/nticks == 20/
+{
+	nticks = 0;
+	printf("%5s %5s %5s %5s %4s %5s %4s %8s %7s %4s\n",
+	    "QS", "QD", "TxnS", "TxCm", "TxAb", "XLI", "Sort",
+	    "BufRd", "BufWd", "WBD");
+}
+EOF
+
+dtrace -s "$ps_tmpfile"
