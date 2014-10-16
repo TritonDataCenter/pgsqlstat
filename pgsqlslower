@@ -28,6 +28,9 @@ finish on all postgresql instances on this system.  Note that since this tool
 traces query start to query done, it will never see queries taking longer than
 NMILLISECONDS seconds.
 
+This is similar to pgsqltxslower, except that it's tracing simple queries.  For
+extended queries that are part of transactions, see pgsqltxslower.
+
 This tool requires privileges to use DTrace on postgres processes on this
 system.  If you see no output but expect some, check whether your user has
 permissions to trace the postgres processes.

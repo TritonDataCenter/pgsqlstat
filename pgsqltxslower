@@ -1,0 +1,325 @@
+#!/bin/bash
+
+#
+# pgsqltxslower NMILLIS: report details on slow postgres transactions
+#
+
+ps_arg0="pgsqltxslower"
+
+#
+# Some of this boilerplate is common to several tools, but it's duplicated here
+# because it's very useful for these to be standalone scripts.
+#
+ps_tmpfile="/var/tmp/$ps_arg0.$$"
+ps_number_re='^[1-9][0-9]*$'
+ps_synopsis="usage: $ps_arg0 NMILLISECONDS"
+
+if [[ $# == 0 ]]; then
+	echo "$ps_synopsis" >&2
+	exit 2
+fi
+
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+	cat >&2 <<EOF
+$ps_synopsis
+
+Print details about transactions taking longer than NMILLISECONDS from start to
+finish on all postgresql instances on this system.  Note that since this tool
+traces transaction start to commit/abort, it will never see transactions taking
+longer than NMILLISECONDS seconds.
+
+This is similar to pgsqlslower, except that it's tracing transactions, which
+may be made up of multiple queries.
+
+This tool requires privileges to use DTrace on postgres processes on this
+system.  If you see no output but expect some, check whether your user has
+permissions to trace the postgres processes.
+EOF
+	exit 2
+elif ! [[ "$1" == "0" || "$1" =~ $ps_number_re ]]; then
+	echo "$ps_arg0: bad number of milliseconds" >&2
+	echo "$ps_synopsis" >&2
+	exit 2
+fi
+
+trap cleanup EXIT
+function cleanup
+{
+	rm -f "$ps_tmpfile"
+}
+
+if ! type dtrace > /dev/null 2>&1; then
+	echo "$ps_arg0: requires dtrace(1M), but not found" >&2
+	exit 1
+fi
+
+cat > "$ps_tmpfile" <<EOF
+#!/usr/sbin/dtrace -Cs
+
+/*
+ * pgsqltxslower.d: trace postgres transactions slower than $1 milliseconds.
+ *
+ * This script attempts to identify transactions that are taking a long time and
+ * print out details about where they spent time.  Postgres includes probes to
+ * measure time spent parsing, planning, rewriting, and executing a query, but
+ * in practice there are gaps between these, particularly when postgres is
+ * waiting for a client to send the next protocol command.  The main sources of
+ * latency we hope to shine light on are:
+ *
+ *   o time spent executing queries, for which we'd like to provide additional
+ *     information like number and kind of sort operations (i.e., internal vs.
+ *     external), the number of buffers read, and the like.
+ *   o time spent parsing, planning, or rewriting queries (likely to be low)
+ *   o time spent between these various phases.  Some of these gaps may be
+ *     attributable to client latency.
+ *
+ * As an implementation note: although query-start/query-done can happen outside
+ * the context of a transaction (see notes.txt for details), this script uses
+ * query-parse-start to identify the query strings being processed, and that
+ * probe does fire inside a transaction.
+ *
+ * We use a speculative buffer to track each outstanding transaction, so there
+ * must be as many speculative buffers available as there may be outstanding
+ * postgres transactions in order to avoid drops.  We use 1024 here.  As for
+ * buffer size, we need 512 bytes for each query string (strsize below), plus a
+ * little more for the timing data.  With the default 32K, we should have room
+ * for several query strings at a cost of 32MB of system DRAM (given
+ * nspec=1024).
+ */
+#pragma D option nspec=1024
+#pragma D option strsize=512
+#pragma D option specsize=32k
+#pragma D option quiet
+#pragma D option temporal
+#pragma D option zdefs
+
+/*
+ * The threshold is the transaction latency above which we'll print out details
+ * on the transaction.
+ */
+#define THRESHOLD	($1)
+
+/*
+ * Given a nanosecond timestamp, expands to two values denoting the integral
+ * numbers of milliseconds and microseconds (e.g., for passing to printf).
+ */
+#define	FMTMILLIS(X)	((X) / 1000000), (((X) % 1000000) / 1000)
+
+/*
+ * We save the timestamp when we start tracing so that in order to print
+ * relative timestamps with each event.  This is particularly important because
+ * even with the temporal option, DTrace doesn't always appear to print
+ * speculative events in order.
+ */
+BEGIN
+{
+	tracing_start = timestamp;
+}
+
+/*
+ * Everything we're tracing is scoped between transaction-start and
+ * transaction-{abort,commit}, and postgresql only does one thing at a time with
+ * each thread, so we initialize thread-locals here.
+ */
+postgresql*:::transaction-start
+/!self->txn_spec/
+{
+	self->txn_spec = speculation();
+	self->txn_start = timestamp;
+
+	self->txn_gapstart = self->txn_start;
+	self->txn_qstr = 0;
+	self->txn_gap = 0;
+	self->txn_opstart = 0;
+	self->txn_depth = 0;
+
+	self->txn_internal_sorts = 0;
+	self->txn_external_sorts = 0;
+	self->txn_bufreads = 0;
+
+}
+
+postgresql*:::transaction-start
+/self->txn_spec/
+{
+	speculate(self->txn_spec);
+	printf("\n  %9s %6s %8s %8s %s\n",
+	    "TIME", "PID", "GAP(ms)", "ELAP(ms)", "EVENT");
+	printf("  %5d.%03d %6d %4d.%03d %4d.%03d %-18s\n",
+	    FMTMILLIS(timestamp - tracing_start), pid,
+	    FMTMILLIS(timestamp - self->txn_start), 0, 0, "transaction-start");
+}
+
+/*
+ * We divide transaction time into discrete sub-operations (query-parse,
+ * query-plan, query-rewrite, and query-execute) and the gaps between them.  On
+ * the start of the transaction (above) and the completion of these
+ * suboperations, we record a timestamp as the start of the current gap.  On the
+ * start of each operation, we record the gap time as the timestamp minus the
+ * saved gap start timestamp.
+ *
+ * The query-parse operation is unique in that we record and print the argument,
+ * which is the query string being processed.
+ */
+postgresql*:::query-parse-start
+/self->txn_spec/
+{
+	self->txn_qstr = arg0;
+}
+
+/*
+ * Some of these operations can be recursive (e.g., query-execute).  Keep track
+ * of the depth and ignore anything but the outermost one.
+ */
+postgresql*:::query-parse-start,
+postgresql*:::query-plan-start,
+postgresql*:::query-rewrite-start,
+postgresql*:::query-execute-start
+/self->txn_spec/
+{
+	self->txn_depth++;
+}
+
+postgresql*:::query-parse-start,
+postgresql*:::query-plan-start,
+postgresql*:::query-rewrite-start,
+postgresql*:::query-execute-start
+/self->txn_spec && self->txn_depth == 1/
+{
+	self->txn_gap = timestamp - self->txn_gapstart;
+	self->txn_opstart = timestamp;
+}
+
+postgresql*:::buffer-read-done
+/self->txn_spec && self->txn_depth >= 1/
+{
+	self->txn_bufreads++;
+}
+
+postgresql*:::sort-done
+/self->txn_spec && self->txn_depth >= 1 && arg0/
+{
+	self->txn_external_sorts++;
+}
+
+postgresql*:::sort-done
+/self->txn_spec && self->txn_depth >= 1 && !arg0/
+{
+	self->txn_internal_sorts++;
+}
+
+postgresql*:::query-plan-done,
+postgresql*:::query-rewrite-done
+/self->txn_spec && self->txn_depth == 1/
+{
+	/* For brevity, chop off the "-done" part of the probe name. */
+	this->pnlen = strlen(probename) - strlen("-done") + 1;
+	this->pn = (char *)alloca(this->pnlen);
+	bcopy(probename, this->pn, this->pnlen - 1);
+	this->pn[this->pnlen - 1] = '\0';
+
+	speculate(self->txn_spec);
+	printf("  %5d.%03d %6d %4d.%03d %4d.%03d %-18s\n",
+	    FMTMILLIS(timestamp - tracing_start), pid,
+	    FMTMILLIS(self->txn_gap),
+	    FMTMILLIS(timestamp - self->txn_opstart),
+	    stringof(this->pn));
+	this->pn = 0;
+	this->pnlen = 0;
+}
+
+postgresql*:::query-execute-done
+/self->txn_spec && self->txn_depth == 1/
+{
+	speculate(self->txn_spec);
+	printf("  %5d.%03d %6d %4d.%03d %4d.%03d %-18s ",
+	    FMTMILLIS(timestamp - tracing_start), pid,
+	    FMTMILLIS(self->txn_gap),
+	    FMTMILLIS(timestamp - self->txn_opstart),
+	    "query-execute");
+	printf("%d buffer reads, %d internal sorts, %d external sorts\n",
+	    self->txn_bufreads, self->txn_internal_sorts,
+	    self->txn_external_sorts);
+}
+
+postgresql*:::query-parse-done
+/self->txn_spec && self->txn_depth == 1/
+{
+	speculate(self->txn_spec);
+	printf("  %5d.%03d %6d %4d.%03d %4d.%03d %-18s %s\n",
+	    FMTMILLIS(timestamp - tracing_start), pid,
+	    FMTMILLIS(self->txn_gap),
+	    FMTMILLIS(timestamp - self->txn_opstart),
+	    "query-parse", copyinstr(self->txn_qstr));
+}
+
+postgresql*:::query-execute-done
+/self->txn_spec && self->txn_depth == 1/
+{
+	self->txn_internal_sorts = 0;
+	self->txn_external_sorts = 0;
+	self->txn_bufreads = 0;
+}
+
+postgresql*:::query-plan-done,
+postgresql*:::query-rewrite-done,
+postgresql*:::query-execute-done,
+postgresql*:::query-parse-done
+/self->txn_spec && self->txn_depth == 1/
+{
+	self->txn_qstr = 0;
+	self->txn_gap = 0;
+	self->txn_opstart = 0;
+	self->txn_gapstart = timestamp;	
+}
+
+postgresql*:::query-parse-done,
+postgresql*:::query-plan-done,
+postgresql*:::query-rewrite-done,
+postgresql*:::query-execute-done
+/self->txn_spec/
+{
+	self->txn_depth--;
+}
+
+postgresql*:::transaction-abort,
+postgresql*:::transaction-commit
+/self->txn_spec/
+{
+	speculate(self->txn_spec);
+	printf("  %5d.%03d %6d %4d.%03d %4d.%03d %-18s\n",
+	    FMTMILLIS(timestamp - tracing_start), pid,
+	    FMTMILLIS(timestamp - self->txn_gapstart),
+	    FMTMILLIS(timestamp - self->txn_start), probename);
+}
+
+postgresql*:::transaction-abort,
+postgresql*:::transaction-commit
+/self->txn_spec && (timestamp - self->txn_start) > THRESHOLD * 1000000/
+{
+	commit(self->txn_spec);
+	self->txn_spec = 0;
+}
+
+postgresql*:::transaction-abort,
+postgresql*:::transaction-commit
+/self->txn_spec/
+{
+	discard(self->txn_spec);
+	self->txn_spec = 0;
+}
+
+postgresql*:::transaction-abort,
+postgresql*:::transaction-commit
+{
+	self->txn_spec = 0;
+	self->txn_qstr = 0;
+	self->txn_gap = 0;
+	self->txn_gapstart = 0;
+	self->txn_opstart = 0;
+	self->txn_start = 0;
+	self->txn_depth = 0;
+}
+EOF
+
+dtrace -Cs "$ps_tmpfile"
