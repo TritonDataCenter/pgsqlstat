@@ -241,7 +241,7 @@ For example, tracing queries over ten seconds while running "pgbench":
               200000 |                                         10       
               300000 |                                         0        
 
-## <a name="pgsqltxslower">pgsqltxslower</a>
+## <a name="pgsqltxslower">pgsqltxslower</a>: print details about slow transactions
 
     pgsqltxslower NMILLISECONDS
 
