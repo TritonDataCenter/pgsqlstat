@@ -399,10 +399,10 @@ query-execute, though.
 
 To summarize: what's subtle about this is that:
 
-  o query strings are only associated with queries, not transactions, and so
-    are available only at query-start
-  o query-start probes may happen inside of a transaction or they may end up
-    being part of a subsequently-created transaction
+* query strings are only associated with queries, not transactions, and so
+  are available only at query-start
+* query-start probes may happen inside of a transaction or they may end up
+  being part of a subsequently-created transaction
 
 As a result, the total transaction time is measured from transaction-start to
 transaction-{commit or abort}, but if we want to keep track of the queries
