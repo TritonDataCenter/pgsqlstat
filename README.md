@@ -127,7 +127,7 @@ of transactions started, committed, or aborted; and the number of internal
 postgres buffers read and flushed.
 
 
-## <a name="pgsqlslowest">pgsqlslowest</a>
+## <a name="pgsqlslowest">pgsqlslowest</a>: print details about N slowest queries
 
     pgsqlslowest NSECONDS [MAXQUERIES]
 
@@ -163,7 +163,7 @@ For example, tracing the 15 slowest queries over five seconds while running "pgb
         118198  BEGIN;
        2083346  END;
 
-## <a name="pgsqllat">pgsqllat</a>
+## <a name="pgsqllat">pgsqllat</a>: print details about query latency
 
     pgsqllat NSECONDS
 
