@@ -100,7 +100,7 @@ Output columns:
 Print details about queries taking longer than NMILLISECONDS from start to
 finish on all postgresql instances on this system.  Note that since this tool
 traces query start to query done, it will never see queries taking longer than
-NMILLISECONDS seconds.
+the command has been running.
 
 This is similar to pgsqltxslower, except that it's tracing simple queries.  For
 extended queries that are part of transactions, see pgsqltxslower.
@@ -136,7 +136,7 @@ postgres buffers read and flushed.
 Traces all queries for NSECONDS seconds on all postgresql instances on this
 system and prints the MAXQUERIES slowest queries.  Note that because this tool
 traces from query start to query completion, it will never see queries that
-take longer than NSECONDS to complete.
+take longer than the command has been running.
 
 For example, tracing the 15 slowest queries over five seconds while running "pgbench":
 
@@ -172,8 +172,8 @@ For example, tracing the 15 slowest queries over five seconds while running "pgb
 Traces all queries for NSECONDS seconds on all postgresql instances on this
 system and prints distributions of query latency over time and overall query
 latency.  Note that because this tool traces from query start to query
-completion, it will never see queries that take longer than NSECONDS to
-complete.
+completion, it will never see queries that take longer than the command has been
+running.
 
 For example, tracing queries over ten seconds while running "pgbench":
 
@@ -250,7 +250,7 @@ For example, tracing queries over ten seconds while running "pgbench":
 Print details about transactions taking longer than NMILLISECONDS from start to
 finish on all postgresql instances on this system.  Note that since this tool
 traces transaction start to commit/abort, it will never see transactions taking
-longer than NMILLISECONDS seconds.
+longer than the command has been running.
 
 This is similar to pgsqlslower, except that it's tracing transactions, which
 may be made up of multiple queries.
@@ -331,7 +331,7 @@ it is to:
    in.
 
 
-## <a name="pgsqlstat">pglockwaits</a>: print counts of lock wait events
+## <a name="pglockwaits">pglockwaits</a>: print counts of lock wait events
 
     pglockwaits NSECONDS
 
