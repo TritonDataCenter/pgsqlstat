@@ -1,0 +1,136 @@
+#!/bin/bash
+
+#
+# pglockwaits NSECONDS: report postgres lock wait events (i.e., events where a
+# PostgreSQL backend started waiting for a lock).
+#
+
+ps_arg0="pglockwaits"
+
+#
+# Some of this boilerplate is common to several tools, but it's duplicated here
+# because it's very useful for these to be standalone scripts.
+#
+ps_tmpfile="/var/tmp/$ps_arg0.$$"
+ps_number_re='^[1-9][0-9]*$'
+ps_synopsis="usage: $ps_arg0 NSECONDS"
+
+if [[ $# == 0 ]]; then
+	echo "$ps_synopsis" >&2
+	exit 2
+fi
+
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+	cat >&2 <<EOF
+$ps_synopsis
+
+Prints out stats every NSECONDS about postgresql lock wait events.  In this
+context, "lock wait events" refer to cases where a postgresql backend began
+waiting for a lock because the lock was already held.  Use CTRL-C to stop.
+
+The output columns correspond to different types of PostgreSQL locks.  These are:
+
+    AS		ACCESS SHARE
+    RS		ROW SHARE
+    RX		ROW EXCLUSIVE
+    SUX		SHARE UPDATE EXCLUSIVE
+    S		SHARE
+    SRX		SHARE ROW EXCLUSIVE
+    X		EXCLUSIVE
+    AX		ACCESS EXCLUSIVE
+
+See http://www.postgresql.org/docs/current/static/explicit-locking.html.
+
+This tool requires privileges to use DTrace on postgres processes on this
+system.  If you see all zeroes but expect some data, check whether your user has
+permissions to trace the postgres processes.
+EOF
+	exit 2
+elif ! [[ "$1" =~ $ps_number_re ]]; then
+	echo "$ps_arg0: bad number of seconds" >&2
+	echo "$ps_synopsis" >&2
+	exit 2
+fi
+
+trap cleanup EXIT
+function cleanup
+{
+	rm -f "$ps_tmpfile"
+}
+
+if ! type dtrace > /dev/null 2>&1; then
+	echo "$ps_arg0: requires dtrace(1M), but not found" >&2
+	exit 1
+fi
+
+cat > "$ps_tmpfile" <<EOF
+#!/usr/sbin/dtrace -Cs
+
+#pragma D option quiet
+#pragma D option zdefs
+
+/*
+ * These definitions can be found in the PostgreSQL source code in
+ * src/include/storage/lock.h.
+ */
+#define	ACCESS_SHARE          	1
+#define	ROW_SHARE             	2
+#define	ROW_EXCLUSIVE         	3
+#define	SHARE_UPDATE_EXCLUSIVE	4
+#define	SHARE                 	5
+#define	SHARE_ROW_EXCLUSIVE   	6
+#define	EXCLUSIVE             	7
+#define	ACCESS_EXCLUSIVE      	8
+#define	LOCKTYPE_MAX		ACCESS_EXCLUSIVE
+
+BEGIN
+{
+	printf("%20s %5s %5s %5s %5s %5s %5s %5s %5s\n", "",
+	    "AS", "RS", "RX", "SUX", "S", "SRX", "X", "AX");
+}
+
+postgresql*:::lock-wait-start
+/arg5 <= LOCKTYPE_MAX/
+{
+	waiting[arg5]++;
+}
+
+postgresql*:::lock-wait-start
+/arg5 > LOCKTYPE_MAX/
+{
+	printf("warning: unknown locktype: %x\n", arg5);
+}
+
+tick-$1s
+{
+	printf("%Y %5d %5d %5d %5d %5d %5d %5d %5d\n", walltimestamp,
+	    waiting[ACCESS_SHARE],
+	    waiting[ROW_SHARE],
+	    waiting[ROW_EXCLUSIVE],
+	    waiting[SHARE_UPDATE_EXCLUSIVE],
+	    waiting[SHARE],
+	    waiting[SHARE_ROW_EXCLUSIVE],
+	    waiting[EXCLUSIVE],
+	    waiting[ACCESS_EXCLUSIVE]);
+
+	waiting[ACCESS_SHARE] = 0;
+	waiting[ROW_SHARE] = 0;
+	waiting[ROW_EXCLUSIVE] = 0;
+	waiting[SHARE_UPDATE_EXCLUSIVE] = 0;
+	waiting[SHARE] = 0;
+	waiting[SHARE_ROW_EXCLUSIVE] = 0;
+	waiting[EXCLUSIVE] = 0;
+	waiting[ACCESS_EXCLUSIVE] = 0;
+	nticks++;
+}
+
+tick-$1s
+/nticks == 20/
+{
+	printf("%20s %5s %5s %5s %5s %5s %5s %5s %5s\n", "",
+	    "AS", "RS", "RX", "SUX", "S", "SRX", "X", "AX");
+	nticks = 0;
+}
+EOF
+
+dtrace -Cs "$ps_tmpfile"

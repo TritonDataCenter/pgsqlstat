@@ -9,6 +9,8 @@ This repo contains a few tools for monitoring Postgres in production:
 * [pgsqllat](#pgsqllat): print details about query latency distribution
 * [pgsqltxslower](#pgsqltxslower): print details about *transactions* taking
   longer than N milliseconds
+* [pglockwaits](#pglockwaits): print counts of events where Postgres blocked
+  waiting for a lock
 
 All of these use Postgres's built-in DTrace probes under the hood, which means:
 
@@ -327,6 +329,51 @@ it is to:
    Then the events for all transactions handled by that process will be in
    order and you can find all the events for the transaction you're interested
    in.
+
+
+## <a name="pgsqlstat">pglockwaits</a>: print counts of lock wait events
+
+    pglockwaits NSECONDS
+
+Prints out stats every NSECONDS about all cases where a postgresql backend
+blocked waiting for a lock.  The results are broken out by lock type.  Use
+CTRL-C to stop.
+
+Here's an example run on a postgres database that started idle and then had
+load applied for a few seconds:
+
+    $ pglockwaits 1
+                            AS    RS    RX   SUX     S   SRX     X    AX
+    2015 Aug 13 21:19:27     0     0     0     0     0     0     0     0
+    2015 Aug 13 21:19:28     0     0     0     0     0     0     0     0
+    2015 Aug 13 21:19:29     0     0     0     0     0     0     0     0
+    2015 Aug 13 21:19:30     0     0     0     0   591     0    22     0
+    2015 Aug 13 21:19:31     0     0     0     0 16966     0   165     0
+    2015 Aug 13 21:19:32     0     0     0     0 13762     0    82     0
+    2015 Aug 13 21:19:33     0     0     0     0 19739     0    95     0
+
+
+Output columns correspond to lock types:
+
+    AS		ACCESS SHARE
+
+    RS		ROW SHARE
+
+    RX		ROW EXCLUSIVE
+
+    SUX		SHARE UPDATE EXCLUSIVE
+
+    S		SHARE
+
+    SRX		SHARE ROW EXCLUSIVE
+
+    X		EXCLUSIVE
+
+    AX		ACCESS EXCLUSIVE
+
+See http://www.postgresql.org/docs/current/static/explicit-locking.html for more
+information about these.
+
 
 # Implementation notes
 
